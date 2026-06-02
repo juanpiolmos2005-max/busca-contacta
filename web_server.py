@@ -700,19 +700,32 @@ progress::-webkit-progress-value { background:var(--green); border-radius:3px; }
 <!-- ══════════ ENVÍO ══════════ -->
 <div class="page" id="page-envio">
   <div class="card">
-    <div class="card-header" style="border-left-color:var(--orange)">📁 Base de contactos</div>
+    <div class="card-header" style="border-left-color:var(--orange)">📋 Base de contactos</div>
     <div class="card-body">
-      <div class="drop-zone" id="dropZone"
-           onclick="document.getElementById('fileInput').click()"
-           ondragover="event.preventDefault();this.classList.add('drag')"
-           ondragleave="this.classList.remove('drag')"
-           ondrop="event.preventDefault();this.classList.remove('drag');loadFile({files:event.dataTransfer.files})">
-        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" onchange="loadFile(this)">
-        <div style="font-size:2em;margin-bottom:8px;">📂</div>
-        <div>Tocá para subir base (Excel / CSV)</div>
-        <div id="fileInfo" style="color:var(--blue);margin-top:6px;font-size:12px;"></div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">
+        Abrí tu Excel, seleccioná todas las filas (con encabezados) y pegálas acá con <strong style="color:var(--text)">Ctrl+V</strong>
       </div>
-      <div id="preview" style="margin-top:10px;font-size:12px;color:var(--muted);white-space:pre-line;"></div>
+      <div style="background:var(--card2);border:1px solid var(--bord);border-radius:6px;
+                  padding:10px;font-size:11px;color:var(--dim);margin-bottom:8px;">
+        Columnas esperadas: <span style="color:var(--blue)">Telefono · E-mail · Identificador · Fecha · Apellido · Nombre · Carrera · Modalidad · Provincia · Segmento · Duracion</span>
+      </div>
+      <textarea id="pasteArea" rows="6"
+        style="font-family:monospace;font-size:11px;background:var(--surf);
+               border:2px dashed var(--bord2);border-radius:6px;padding:10px;width:100%;
+               color:var(--text);resize:vertical;"
+        placeholder="Pegá acá el contenido copiado del Excel (Ctrl+V)..."
+        onpaste="setTimeout(()=>procesarPaste(),50)"></textarea>
+      <div class="btn-row" style="margin-top:8px;">
+        <button class="btn btn-blue btn-sm" onclick="procesarPaste()">✅ Procesar datos</button>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('pasteArea').value='';limpiarBase()">🗑 Limpiar</button>
+        <span id="baseNombreInput" style="font-size:12px;color:var(--muted);margin-left:8px;">
+          Nombre de la base: <input type="text" id="baseNombre" placeholder="Ej: 20260602_mañana"
+            style="width:180px;padding:4px 8px;font-size:12px;background:var(--card2);
+                   border:1px solid var(--bord);border-radius:4px;color:var(--text);">
+        </span>
+      </div>
+      <div id="fileInfo" style="color:var(--blue);margin-top:8px;font-size:12px;"></div>
+      <div id="preview" style="margin-top:6px;font-size:12px;color:var(--muted);white-space:pre-line;"></div>
     </div>
   </div>
 
@@ -1011,37 +1024,76 @@ async function authAsesor() {
 }
 
 // ── Carga de archivo ──────────────────────────────────────────────────────────
-async function loadFile(input) {
-  const file = input.files[0]; if (!file) return;
-  document.getElementById('fileInfo').textContent = '⏳ Subiendo al servidor...';
+function limpiarBase() {
+  state.contacts = []; state.baseId = ''; state.baseName = '';
+  document.getElementById('fileInfo').textContent = '';
   document.getElementById('preview').textContent = '';
+  document.getElementById('kpiTotal').textContent = '0';
+}
 
-  const fd = new FormData();
-  fd.append('file', file);
+function procesarPaste() {
+  const text = document.getElementById('pasteArea').value.trim();
+  if (!text) return;
 
-  try {
-    const r = await fetch('/api/upload', {
-      method:'POST', body: fd, credentials:'include',
-      headers: {'X-App-Token': APP_TOKEN}
-    });
-    const data = await r.json();
-    if (data.error) {
-      document.getElementById('fileInfo').textContent = '❌ Error: ' + data.error;
-      return;
-    }
-    state.contacts  = data.contacts;
-    state.baseId    = data.base_id;
-    state.baseName  = file.name;
-    document.getElementById('fileInfo').textContent =
-      `✅ ${file.name} — ${data.contacts.length} contactos`;
-    document.getElementById('preview').textContent =
-      data.contacts.slice(0,3).map(c =>
-        `${c.nombre} ${c.apellido} <${c.mail}> — ${c.carrera}`).join('\n')
-      + (data.contacts.length > 3 ? `\n... y ${data.contacts.length-3} más` : '');
-    document.getElementById('kpiTotal').textContent = data.contacts.length;
-  } catch(e) {
-    document.getElementById('fileInfo').textContent = '❌ Error al subir: ' + e.message;
+  const lines = text.split('\n').map(l => l.split('\t'));
+  if (lines.length < 2) {
+    document.getElementById('fileInfo').textContent = '⚠ Pegá al menos una fila con datos.';
+    return;
   }
+
+  // Detectar si la primera fila es encabezado
+  const first = lines[0].map(h => h.trim().toLowerCase());
+  const hasHeader = first.some(h => ['e-mail','email','mail','nombre','carrera','telefono'].includes(h));
+
+  const headers = hasHeader ? first : null;
+  const dataLines = hasHeader ? lines.slice(1) : lines;
+
+  // Mapeo por nombre de columna o por posición fija
+  // Orden fijo: Telefono E-mail Identificador Fecha Apellido Nombre Carrera Modalidad Provincia Segmento Duracion
+  const getCol = (row, names, fixedIdx) => {
+    if (headers) {
+      for (const n of names) {
+        const i = headers.findIndex(h => h.includes(n));
+        if (i >= 0 && i < row.length) return row[i].trim();
+      }
+    }
+    return fixedIdx < row.length ? row[fixedIdx].trim() : '';
+  };
+
+  const contacts = [];
+  for (const row of dataLines) {
+    if (row.length < 2) continue;
+    const mail = getCol(row, ['e-mail','email','mail'], 1);
+    if (!mail || !mail.includes('@')) continue;
+    contacts.push({
+      telefono: getCol(row, ['telefono','tel','phone'], 0),
+      mail,
+      legajo:   getCol(row, ['identificador','legajo','id'], 2),
+      apellido: getCol(row, ['apellido','apellidos'], 4),
+      nombre:   getCol(row, ['nombre','name'], 5),
+      carrera:  getCol(row, ['carrera','career'], 6),
+      modalidad:getCol(row, ['modalidad'], 7),
+      provincia:getCol(row, ['provincia'], 8),
+    });
+  }
+
+  if (!contacts.length) {
+    document.getElementById('fileInfo').textContent = '❌ No se encontraron emails válidos.';
+    return;
+  }
+
+  state.contacts = contacts;
+  const baseNombre = document.getElementById('baseNombre').value.trim();
+  state.baseId    = baseNombre || new Date().toISOString().slice(0,10).replace(/-/g,'');
+  state.baseName  = state.baseId;
+
+  document.getElementById('fileInfo').textContent =
+    `✅ ${contacts.length} contactos cargados`;
+  document.getElementById('preview').textContent =
+    contacts.slice(0,3).map(c =>
+      `${c.nombre} ${c.apellido} <${c.mail}> — ${c.carrera}`).join('\n')
+    + (contacts.length > 3 ? `\n... y ${contacts.length-3} más` : '');
+  document.getElementById('kpiTotal').textContent = contacts.length;
 }
 
 function parseCSV(text, fname) {
