@@ -93,7 +93,8 @@ def logout():
     return redirect("/login")
 
 # ── Config Microsoft ──────────────────────────────────────────────────────────
-CLIENT_ID  = os.environ.get("CLIENT_ID", "6e508ef7-b92b-415c-adda-c66b500c244f")
+CLIENT_ID     = os.environ.get("CLIENT_ID", "6e508ef7-b92b-415c-adda-c66b500c244f")
+CLIENT_SECRET = os.environ.get("CLIENT_SECRET", "")
 AUTHORITY  = "https://login.microsoftonline.com/common"
 SCOPES     = ["https://graph.microsoft.com/Mail.Send",
               "https://graph.microsoft.com/User.Read",
@@ -145,8 +146,22 @@ def refresh_token_for(email):
         tokens = load_json(TOKENS_FILE, {})
         tok = tokens.get(email.lower(), {})
         if not tok.get("refresh_token"): return None
-        app_msal = msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY)
-        result = app_msal.acquire_token_by_refresh_token(tok["refresh_token"], scopes=SCOPES)
+
+        data = urllib.parse.urlencode({
+            "client_id":     CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "grant_type":    "refresh_token",
+            "refresh_token": tok["refresh_token"],
+            "scope":         " ".join(SCOPES),
+        }).encode()
+        req = urllib.request.Request(
+            f"{AUTHORITY}/oauth2/v2.0/token",
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            result = json.loads(r.read())
         if "access_token" in result:
             tokens[email.lower()]["access_token"]  = result["access_token"]
             tokens[email.lower()]["refresh_token"] = result.get("refresh_token", tok["refresh_token"])
@@ -374,11 +389,12 @@ def api_auth_callback():
 
     redirect_uri = request.host_url.rstrip("/") + "/api/auth/callback"
     data = urllib.parse.urlencode({
-        "client_id":    CLIENT_ID,
-        "grant_type":   "authorization_code",
-        "code":         code,
-        "redirect_uri": redirect_uri,
-        "scope":        " ".join(SCOPES),
+        "client_id":     CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "grant_type":    "authorization_code",
+        "code":          code,
+        "redirect_uri":  redirect_uri,
+        "scope":         " ".join(SCOPES),
     }).encode()
 
     req = urllib.request.Request(
@@ -1170,7 +1186,7 @@ async function loadTracking() {
   const icons = {open:'📧 Apertura',wa:'💬 WhatsApp',tel:'📞 0800',form:'📝 Formulario'};
   const colors= {open:'var(--green)',wa:'var(--orange)',tel:'var(--red)',form:'var(--blue)'};
   document.getElementById('trackBody').innerHTML =
-    [...data].reverse().slice(0,100).map(e=>`
+    [...data].reverse().map(e=>`
     <tr>
       <td>${(e.ts||'').slice(0,16).replace('T',' ')}</td>
       <td style="color:${colors[e.accion]||'inherit'}">${icons[e.accion]||e.accion}</td>
@@ -1308,7 +1324,31 @@ loadAsesores();
 
 
 # ── Upload endpoint para XLSX ─────────────────────────────────────────────────
-@app.route("/api/upload", methods=["POST"])
+@app.route("/api/sync", methods=["POST"])
+@login_required
+def api_sync():
+    """Recibe datos desde la app de escritorio para sincronizar."""
+    data = request.json
+    if "tracking" in data:
+        existing = load_json(TRACKING_FILE, [])
+        # Mergear evitando duplicados por ts+mail
+        existing_keys = {(e.get("ts",""), e.get("mail","")) for e in existing}
+        nuevos = [e for e in data["tracking"]
+                  if (e.get("ts",""), e.get("mail","")) not in existing_keys]
+        merged = existing + nuevos
+        save_json(TRACKING_FILE, merged)
+        return jsonify({"ok": True, "merged": len(nuevos), "total": len(merged)})
+    if "asesores" in data:
+        save_json(ASESORES_FILE, data["asesores"])
+        return jsonify({"ok": True})
+    if "historial" in data:
+        existing = load_json(HISTORIAL_FILE, [])
+        existing_keys = {(e.get("ts",""), e.get("to","")) for e in existing}
+        nuevos = [e for e in data["historial"]
+                  if (e.get("ts",""), e.get("to","")) not in existing_keys]
+        save_json(HISTORIAL_FILE, existing + nuevos)
+        return jsonify({"ok": True, "merged": len(nuevos)})
+    return jsonify({"error": "Sin datos"}), 400
 def api_upload():
     try:
         import pandas as pd
