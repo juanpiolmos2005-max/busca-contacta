@@ -279,74 +279,94 @@ def run_send_job(job_id, contacts, asesores, subject_tpl, body_html_tpl,
             "sent": 0, "errors": 0, "log": [], "start": datetime.now().isoformat()
         }
 
-    tokens = load_json(TOKENS_FILE, {})
-    historial = load_json(HISTORIAL_FILE, [])
+    tokens  = load_json(TOKENS_FILE, {})
     activos = [a for a in asesores if a.get("active", True) and
                (turno == "Todos" or (a.get("grupo","")).lower() == turno.lower())]
     if not activos:
         with _jobs_lock:
             _job_status[job_id]["status"] = "error"
-            _job_status[job_id]["log"].append("Sin asesores activos")
+            _job_status[job_id]["log"].append({"ts": datetime.now().strftime("%H:%M:%S"),
+                                               "msg": "Sin asesores activos", "tipo": "err"})
         return
 
     def log(msg, tipo="info"):
         with _jobs_lock:
-            _job_status[job_id]["log"].append({"ts": datetime.now().strftime("%H:%M:%S"),
-                                               "msg": msg, "tipo": tipo})
+            _job_status[job_id]["log"].append({
+                "ts": datetime.now().strftime("%H:%M:%S"), "msg": msg, "tipo": tipo})
 
+    # Distribuir contactos por asesor
+    grupos = {i: [] for i in range(len(activos))}
     for i, row in enumerate(contacts):
-        if _job_status[job_id].get("stop"):
-            log("Detenido por el usuario", "warn"); break
+        grupos[i % len(activos)].append(row)
 
-        # Distribuir por round-robin
-        adv = activos[i % len(activos)]
+    historial_lock = threading.Lock()
+    historial      = load_json(HISTORIAL_FILE, [])
+
+    def send_grupo(adv, lote):
+        """Cada asesor envía su lote en su propio hilo."""
         adv_email = adv["email"]
-
         token = get_access_token(adv_email)
         if not token:
-            log(f"Sin token para {adv_email} — omitiendo contacto {row.get('mail','')}", "err")
-            with _jobs_lock: _job_status[job_id]["errors"] += 1
-            continue
+            log(f"Sin token para {adv.get('name',adv_email)} — omitidos {len(lote)} contactos", "err")
+            with _jobs_lock: _job_status[job_id]["errors"] += len(lote)
+            return
 
-        nombre  = str(row.get("nombre","")).strip()
-        mail    = str(row.get("mail","")).strip()
-        carrera = str(row.get("carrera","")).strip()
+        for row in lote:
+            if _job_status[job_id].get("stop"):
+                break
 
-        def fill(t):
-            return (t.replace("{Nombre}", nombre)
-                     .replace("{Asesor}", adv.get("name",""))
-                     .replace("{Carrera}", carrera)
-                     .replace("{Apellido}", str(row.get("apellido","")))
-                     .replace("{Provincia}", str(row.get("provincia","")))
-                     .replace("{Legajo}", str(row.get("legajo",""))))
+            nombre  = str(row.get("nombre","")).strip()
+            mail    = str(row.get("mail","")).strip()
+            carrera = str(row.get("carrera","")).strip()
 
-        subject  = fill(subject_tpl)
-        body_html = fill(build_email_html(nombre, carrera, mail, base_id,
-                                          fill(body_html_tpl),
-                                          wa_number=wa_number,
-                                          incluir_form=incluir_form,
-                                          incluir_tel=incluir_tel))
-        try:
-            send_mail_graph(token, mail, subject, body_html)
-            with _jobs_lock: _job_status[job_id]["sent"] += 1
-            log(f"✅ {mail} → {adv.get('name','')}", "ok")
-            historial.append({
-                "ts": datetime.now().isoformat(), "asesor": adv.get("name",""),
-                "to": mail, "nombre": nombre, "carrera": carrera,
-                "status": "enviado", "base_id": base_id, "base_name": base_name
-            })
-        except Exception as e:
-            with _jobs_lock: _job_status[job_id]["errors"] += 1
-            log(f"❌ {mail}: {str(e)[:80]}", "err")
-            historial.append({
-                "ts": datetime.now().isoformat(), "asesor": adv.get("name",""),
-                "to": mail, "nombre": nombre, "carrera": carrera,
-                "status": "error", "base_id": base_id, "base_name": base_name
-            })
+            def fill(t, _nombre=nombre, _adv=adv, _carrera=carrera, _row=row):
+                return (t.replace("{Nombre}",   _nombre)
+                         .replace("{Asesor}",   _adv.get("name",""))
+                         .replace("{Carrera}",  _carrera)
+                         .replace("{Apellido}", str(_row.get("apellido","")))
+                         .replace("{Provincia}",str(_row.get("provincia","")))
+                         .replace("{Legajo}",   str(_row.get("legajo",""))))
 
-        save_json(HISTORIAL_FILE, historial)
-        if i < len(contacts) - 1:
-            time.sleep(delay)
+            subject   = fill(subject_tpl)
+            body_html = fill(build_email_html(nombre, carrera, mail, base_id,
+                                              fill(body_html_tpl),
+                                              wa_number=wa_number,
+                                              incluir_form=incluir_form,
+                                              incluir_tel=incluir_tel))
+            try:
+                # Renovar token si es necesario
+                current_token = get_access_token(adv_email)
+                send_mail_graph(current_token, mail, subject, body_html)
+                with _jobs_lock: _job_status[job_id]["sent"] += 1
+                log(f"✅ {mail} → {adv.get('name','')}", "ok")
+                entry = {"ts": datetime.now().isoformat(), "asesor": adv.get("name",""),
+                         "to": mail, "nombre": nombre, "carrera": carrera,
+                         "status": "enviado", "base_id": base_id, "base_name": base_name}
+            except Exception as e:
+                with _jobs_lock: _job_status[job_id]["errors"] += 1
+                log(f"❌ {mail}: {str(e)[:80]}", "err")
+                entry = {"ts": datetime.now().isoformat(), "asesor": adv.get("name",""),
+                         "to": mail, "nombre": nombre, "carrera": carrera,
+                         "status": "error", "base_id": base_id, "base_name": base_name}
+
+            with historial_lock:
+                historial.append(entry)
+                save_json(HISTORIAL_FILE, historial)
+
+            if delay > 0:
+                time.sleep(delay)
+
+    # Lanzar un hilo por asesor — todos envían en paralelo
+    hilos = []
+    for idx, adv in enumerate(activos):
+        lote = grupos[idx]
+        if not lote: continue
+        t = threading.Thread(target=send_grupo, args=(adv, lote), daemon=True)
+        hilos.append(t)
+        t.start()
+
+    for t in hilos:
+        t.join()
 
     with _jobs_lock:
         _job_status[job_id]["status"] = "done"
