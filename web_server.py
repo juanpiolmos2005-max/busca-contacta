@@ -1029,47 +1029,6 @@ async function loadFile(input) {
   }
 }
 
-function parseCSV(text, fname) {
-  const lines = text.trim().split('\n');
-  const headers = lines[0].split(/[,;]/).map(h => h.trim().toLowerCase()
-    .replace(/['"]/g,'').normalize('NFD').replace(/[\u0300-\u036f]/g,''));
-  const findCol = (...opts) => {
-    for (const o of opts) { const i = headers.indexOf(o); if(i>=0) return i; }
-    return -1;
-  };
-  const iMail = findCol('mail','email','correo','e-mail');
-  const iNom  = findCol('nombre','name','first_name','firstname');
-  const iApe  = findCol('apellido','apellidos','last_name','lastname');
-  const iCar  = findCol('carrera','career');
-  const iProv = findCol('provincia','province','region');
-  const iLeg  = findCol('legajo','cli_idoriginal','id');
-
-  state.contacts = lines.slice(1).map(l => {
-    const cols = l.split(/[,;]/).map(c => c.trim().replace(/^["']|["']$/g,''));
-    return {
-      mail:     iMail>=0 ? cols[iMail] : '',
-      nombre:   iNom>=0  ? cols[iNom]  : '',
-      apellido: iApe>=0  ? cols[iApe]  : '',
-      carrera:  iCar>=0  ? cols[iCar]  : '',
-      provincia:iProv>=0 ? cols[iProv] : '',
-      legajo:   iLeg>=0  ? cols[iLeg]  : '',
-    };
-  }).filter(c => c.mail && c.mail.includes('@'));
-
-  state.baseId   = fname.replace(/\.[^.]+$/,'');
-  state.baseName = fname;
-  showPreview();
-}
-
-function showPreview() {
-  document.getElementById('fileInfo').textContent =
-    `✅ ${state.baseName} — ${state.contacts.length} contactos cargados`;
-  document.getElementById('preview').textContent =
-    state.contacts.slice(0,3).map(c => `${c.nombre} ${c.apellido} <${c.mail}> — ${c.carrera}`).join('\n')
-    + (state.contacts.length > 3 ? `\n... y ${state.contacts.length-3} más` : '');
-  document.getElementById('kpiTotal').textContent = state.contacts.length;
-}
-
 function insertVar(v) {
   const ta = document.getElementById('bodyText');
   const s  = ta.selectionStart, e = ta.selectionEnd;
