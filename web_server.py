@@ -25,19 +25,21 @@ from flask import (Flask, request, jsonify, session, redirect,
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "kennedy-secret-2026")
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"]   = True
-app.config["PERMANENT_SESSION_LIFETIME"] = 86400 * 30  # 30 días
 
 # ── Contraseña de acceso ──────────────────────────────────────────────────────
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "juanpiolmos2005")
+APP_TOKEN    = "kk-" + APP_PASSWORD  # token simple
 
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        if not session.get("logged_in"):
-            return redirect("/login")
-        return f(*args, **kwargs)
+        # Aceptar token por header, query param o sesión
+        token = (request.headers.get("X-App-Token") or
+                 request.args.get("token") or
+                 session.get("token"))
+        if token == APP_TOKEN or session.get("logged_in"):
+            return f(*args, **kwargs)
+        return redirect("/login")
     return decorated
 
 LOGIN_HTML = """<!DOCTYPE html>
@@ -87,6 +89,7 @@ def login():
         if request.form.get("password") == APP_PASSWORD:
             session.permanent = True
             session["logged_in"] = True
+            session["token"] = APP_TOKEN
             return redirect("/")
         error = True
     return rts(LOGIN_HTML, error=error)
@@ -903,6 +906,7 @@ progress::-webkit-progress-value { background:var(--green); border-radius:3px; }
 
 <script>
 // ── Estado global ─────────────────────────────────────────────────────────────
+const APP_TOKEN = 'kk-juanpiolmos2005';
 let state = {
   asesores: [], contacts: [], baseId: "", baseName: "",
   currentJob: null, tracking: [], ventas: [], historial: [],
@@ -924,7 +928,10 @@ function showPage(name) {
 // ── API helper ─────────────────────────────────────────────────────────────────
 async function api(path, opts={}) {
   const r = await fetch(path, {
-    headers: opts.body ? {'Content-Type':'application/json'} : {},
+    headers: {
+      'Content-Type': 'application/json',
+      'X-App-Token': APP_TOKEN
+    },
     credentials: 'include',
     ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined
@@ -1013,7 +1020,10 @@ async function loadFile(input) {
   fd.append('file', file);
 
   try {
-    const r = await fetch('/api/upload', {method:'POST', body: fd, credentials:'include'});
+    const r = await fetch('/api/upload', {
+      method:'POST', body: fd, credentials:'include',
+      headers: {'X-App-Token': APP_TOKEN}
+    });
     const data = await r.json();
     if (data.error) {
       document.getElementById('fileInfo').textContent = '❌ Error: ' + data.error;
@@ -1032,6 +1042,47 @@ async function loadFile(input) {
   } catch(e) {
     document.getElementById('fileInfo').textContent = '❌ Error al subir: ' + e.message;
   }
+}
+
+function parseCSV(text, fname) {
+  const lines = text.trim().split('\n');
+  const headers = lines[0].split(/[,;]/).map(h => h.trim().toLowerCase()
+    .replace(/['"]/g,'').normalize('NFD').replace(/[\u0300-\u036f]/g,''));
+  const findCol = (...opts) => {
+    for (const o of opts) { const i = headers.indexOf(o); if(i>=0) return i; }
+    return -1;
+  };
+  const iMail = findCol('mail','email','correo','e-mail');
+  const iNom  = findCol('nombre','name','first_name','firstname');
+  const iApe  = findCol('apellido','apellidos','last_name','lastname');
+  const iCar  = findCol('carrera','career');
+  const iProv = findCol('provincia','province','region');
+  const iLeg  = findCol('legajo','cli_idoriginal','id');
+
+  state.contacts = lines.slice(1).map(l => {
+    const cols = l.split(/[,;]/).map(c => c.trim().replace(/^["']|["']$/g,''));
+    return {
+      mail:     iMail>=0 ? cols[iMail] : '',
+      nombre:   iNom>=0  ? cols[iNom]  : '',
+      apellido: iApe>=0  ? cols[iApe]  : '',
+      carrera:  iCar>=0  ? cols[iCar]  : '',
+      provincia:iProv>=0 ? cols[iProv] : '',
+      legajo:   iLeg>=0  ? cols[iLeg]  : '',
+    };
+  }).filter(c => c.mail && c.mail.includes('@'));
+
+  state.baseId   = fname.replace(/\.[^.]+$/,'');
+  state.baseName = fname;
+  showPreview();
+}
+
+function showPreview() {
+  document.getElementById('fileInfo').textContent =
+    `✅ ${state.baseName} — ${state.contacts.length} contactos cargados`;
+  document.getElementById('preview').textContent =
+    state.contacts.slice(0,3).map(c => `${c.nombre} ${c.apellido} <${c.mail}> — ${c.carrera}`).join('\n')
+    + (state.contacts.length > 3 ? `\n... y ${state.contacts.length-3} más` : '');
+  document.getElementById('kpiTotal').textContent = state.contacts.length;
 }
 
 function insertVar(v) {
