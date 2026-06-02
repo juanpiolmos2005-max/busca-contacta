@@ -695,14 +695,17 @@ progress::-webkit-progress-value { background:var(--green); border-radius:3px; }
   <div class="card">
     <div class="card-header" style="border-left-color:var(--orange)">📁 Base de contactos</div>
     <div class="card-body">
-      <div class="drop-zone" onclick="document.getElementById('fileInput').click()"
-           id="dropZone">
+      <div class="drop-zone" id="dropZone"
+           onclick="document.getElementById('fileInput').click()"
+           ondragover="event.preventDefault();this.classList.add('drag')"
+           ondragleave="this.classList.remove('drag')"
+           ondrop="event.preventDefault();this.classList.remove('drag');loadFile({files:event.dataTransfer.files})">
         <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" onchange="loadFile(this)">
         <div style="font-size:2em;margin-bottom:8px;">📂</div>
         <div>Tocá para subir base (Excel / CSV)</div>
         <div id="fileInfo" style="color:var(--blue);margin-top:6px;font-size:12px;"></div>
       </div>
-      <div id="preview" style="margin-top:10px;font-size:12px;color:var(--muted);"></div>
+      <div id="preview" style="margin-top:10px;font-size:12px;color:var(--muted);white-space:pre-line;"></div>
     </div>
   </div>
 
@@ -793,10 +796,17 @@ progress::-webkit-progress-value { background:var(--green); border-radius:3px; }
   <div class="card">
     <div class="card-header" style="border-left-color:var(--blue)">🎯 Eventos recientes</div>
     <div class="card-body">
-      <div class="btn-row" style="margin-bottom:10px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">
         <button class="btn btn-ghost btn-sm" onclick="loadTracking()">🔄 Actualizar</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportTracking()">⬇ Exportar CSV</button>
+        <select id="trackBaseFilter" onchange="renderTracking()"
+          style="background:var(--card2);border:1px solid var(--bord);color:var(--text);
+                 border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;">
+          <option value="">— Todas las bases —</option>
+        </select>
+        <span id="trackCount" style="font-size:11px;color:var(--muted);margin-left:4px;"></span>
       </div>
-      <div class="table-wrap">
+      <div class="table-wrap" style="max-height:500px;overflow-y:auto;">
         <table id="trackTable">
           <thead><tr>
             <th>Fecha/Hora</th><th>Acción</th><th>Nombre</th>
@@ -991,27 +1001,31 @@ async function authAsesor() {
 // ── Carga de archivo ──────────────────────────────────────────────────────────
 async function loadFile(input) {
   const file = input.files[0]; if (!file) return;
-  document.getElementById('fileInfo').textContent = '⏳ Procesando...';
+  document.getElementById('fileInfo').textContent = '⏳ Subiendo al servidor...';
+  document.getElementById('preview').textContent = '';
 
-  const formData = new FormData();
-  formData.append('file', file);
+  const fd = new FormData();
+  fd.append('file', file);
 
-  // Leer CSV/XLSX en el cliente usando FileReader + parsing básico
-  const ext = file.name.split('.').pop().toLowerCase();
-  if (ext === 'csv') {
-    const text = await file.text();
-    parseCSV(text, file.name);
-  } else {
-    // Para XLSX mandamos al servidor
-    const fd = new FormData(); fd.append('file', file);
+  try {
     const r = await fetch('/api/upload', {method:'POST', body: fd});
     const data = await r.json();
-    if (data.contacts) {
-      state.contacts  = data.contacts;
-      state.baseId    = data.base_id;
-      state.baseName  = file.name;
-      showPreview();
+    if (data.error) {
+      document.getElementById('fileInfo').textContent = '❌ Error: ' + data.error;
+      return;
     }
+    state.contacts  = data.contacts;
+    state.baseId    = data.base_id;
+    state.baseName  = file.name;
+    document.getElementById('fileInfo').textContent =
+      `✅ ${file.name} — ${data.contacts.length} contactos`;
+    document.getElementById('preview').textContent =
+      data.contacts.slice(0,3).map(c =>
+        `${c.nombre} ${c.apellido} <${c.mail}> — ${c.carrera}`).join('\n')
+      + (data.contacts.length > 3 ? `\n... y ${data.contacts.length-3} más` : '');
+    document.getElementById('kpiTotal').textContent = data.contacts.length;
+  } catch(e) {
+    document.getElementById('fileInfo').textContent = '❌ Error al subir: ' + e.message;
   }
 }
 
@@ -1161,20 +1175,22 @@ function exportHistorial() {
 
 // ── Tracking ──────────────────────────────────────────────────────────────────
 async function loadTracking() {
+  document.getElementById('trackCount').textContent = 'Cargando...';
   const data = await api('/api/tracking_data');
   state.tracking = data;
 
-  const aperturas  = data.filter(e=>e.accion==='open');
-  const wa         = data.filter(e=>e.accion==='wa');
-  const tel        = data.filter(e=>e.accion==='tel');
-  const form       = data.filter(e=>e.accion==='form');
-  const uniq = (arr,k='mail') => new Set(arr.map(e=>e[k]?.toLowerCase()).filter(Boolean)).size;
+  // Calcular KPIs con todos los datos
+  const aperturas = data.filter(e=>e.accion==='open');
+  const wa        = data.filter(e=>e.accion==='wa');
+  const tel       = data.filter(e=>e.accion==='tel');
+  const form      = data.filter(e=>e.accion==='form');
+  const uniq = (arr) => new Set(arr.map(e=>e.mail?.toLowerCase()).filter(Boolean)).size;
 
   document.getElementById('trackingKpis').innerHTML = [
-    ['👁 Aperturas','var(--green)',  uniq(aperturas),  aperturas.length,  'únicas','totales'],
-    ['💬 WhatsApp', 'var(--orange)', uniq(wa),         wa.length,         'únicos','totales'],
-    ['📞 0800',     'var(--red)',    uniq(tel),         tel.length,        'únicos','totales'],
-    ['📝 Formulario','var(--blue)',  uniq(form),        form.length,       'únicos','totales'],
+    ['👁 Aperturas','var(--green)',  uniq(aperturas), aperturas.length, 'únicas','totales'],
+    ['💬 WhatsApp', 'var(--orange)', uniq(wa),        wa.length,        'únicos','totales'],
+    ['📞 0800',     'var(--red)',    uniq(tel),        tel.length,       'únicos','totales'],
+    ['📝 Formulario','var(--blue)',  uniq(form),       form.length,      'únicos','totales'],
   ].map(([t,c,v1,v2,l1,l2])=>`
     <div class="kpi">
       <div class="kpi-bar" style="background:${c}"></div>
@@ -1183,10 +1199,27 @@ async function loadTracking() {
       <div class="kpi-sub">${l1} | ${v2} ${l2}</div>
     </div>`).join('');
 
-  const icons = {open:'📧 Apertura',wa:'💬 WhatsApp',tel:'📞 0800',form:'📝 Formulario'};
-  const colors= {open:'var(--green)',wa:'var(--orange)',tel:'var(--red)',form:'var(--blue)'};
-  document.getElementById('trackBody').innerHTML =
-    [...data].reverse().map(e=>`
+  // Poblar filtro de bases
+  const bases = [...new Set(data.map(e=>e.base_id).filter(Boolean))].sort().reverse();
+  const sel = document.getElementById('trackBaseFilter');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">— Todas las bases —</option>' +
+    bases.map(b=>`<option value="${b}">${b}</option>`).join('');
+  if (prev) sel.value = prev;
+
+  renderTracking();
+}
+
+function renderTracking() {
+  const filter = document.getElementById('trackBaseFilter').value;
+  const icons  = {open:'📧 Apertura',wa:'💬 WhatsApp',tel:'📞 0800',form:'📝 Formulario'};
+  const colors = {open:'var(--green)',wa:'var(--orange)',tel:'var(--red)',form:'var(--blue)'};
+
+  let data = [...state.tracking].reverse();
+  if (filter) data = data.filter(e => e.base_id === filter);
+
+  document.getElementById('trackCount').textContent = `${data.length} eventos`;
+  document.getElementById('trackBody').innerHTML = data.map(e=>`
     <tr>
       <td>${(e.ts||'').slice(0,16).replace('T',' ')}</td>
       <td style="color:${colors[e.accion]||'inherit'}">${icons[e.accion]||e.accion}</td>
@@ -1195,6 +1228,16 @@ async function loadTracking() {
       <td class="hide-mobile">${e.carrera||''}</td>
       <td class="hide-mobile" style="font-size:11px">${e.base_id||''}</td>
     </tr>`).join('');
+}
+
+function exportTracking() {
+  const filter = document.getElementById('trackBaseFilter').value;
+  let data = state.tracking;
+  if (filter) data = data.filter(e => e.base_id === filter);
+  const rows = [['Fecha/Hora','Acción','Nombre','Email','Carrera','Base'],
+    ...data.map(e=>[e.ts,e.accion,e.nombre,e.mail,e.carrera,e.base_id])];
+  const fname = filter ? `tracking_${filter}.csv` : 'tracking_kennedy.csv';
+  downloadCSV(rows, fname);
 }
 
 // ── Ventas ────────────────────────────────────────────────────────────────────
@@ -1351,38 +1394,72 @@ def api_sync():
     return jsonify({"error": "Sin datos"}), 400
 def api_upload():
     try:
-        import pandas as pd
         f = request.files.get("file")
         if not f: return jsonify({"error": "No file"}), 400
         ext = f.filename.rsplit(".", 1)[-1].lower()
-        df  = pd.read_excel(f, engine="openpyxl") if ext == "xlsx" else pd.read_excel(f, engine="xlrd")
-        df.columns = [c.strip().lower().replace(" ","_") for c in df.columns]
 
-        # Mapear columnas
-        def fcol(*opts):
-            for o in opts:
-                if o in df.columns: return o
-            return None
+        if ext == "csv":
+            import io, csv as csv_mod
+            text = f.read().decode("utf-8-sig", errors="replace")
+            sample = text[:2000]
+            delimiter = ";" if sample.count(";") > sample.count(",") else ","
+            reader = csv_mod.reader(io.StringIO(text), delimiter=delimiter)
+            headers = []
+            for row in reader:
+                headers = [h.strip().lower().replace(" ","_")
+                           .encode("ascii","ignore").decode() for h in row]
+                break
+            def fi(*opts):
+                for o in opts:
+                    if o in headers: return headers.index(o)
+                return -1
+            im = fi("mail","email","correo","e-mail")
+            in_ = fi("nombre","name")
+            ia  = fi("apellido","apellidos")
+            ic  = fi("carrera","career")
+            ip  = fi("provincia")
+            il  = fi("legajo","cli_idoriginal")
+            contacts = []
+            for row in reader:
+                if not row: continue
+                mail = row[im].strip() if im>=0 and im<len(row) else ""
+                if "@" not in mail: continue
+                contacts.append({
+                    "mail":     mail,
+                    "nombre":   row[in_].strip() if in_>=0 and in_<len(row) else "",
+                    "apellido": row[ia].strip()  if ia>=0  and ia<len(row)  else "",
+                    "carrera":  row[ic].strip()  if ic>=0  and ic<len(row)  else "",
+                    "provincia":row[ip].strip()  if ip>=0  and ip<len(row)  else "",
+                    "legajo":   row[il].strip()  if il>=0  and il<len(row)  else "",
+                })
+        else:
+            import pandas as pd
+            engine = "openpyxl" if ext == "xlsx" else "xlrd"
+            df = pd.read_excel(f, engine=engine)
+            df.columns = [str(c).strip().lower().replace(" ","_") for c in df.columns]
+            def fcol(*opts):
+                for o in opts:
+                    if o in df.columns: return o
+                return None
+            mail_col = fcol("mail","email","correo","e-mail")
+            nom_col  = fcol("nombre","name")
+            ape_col  = fcol("apellido","apellidos")
+            car_col  = fcol("carrera","career")
+            prov_col = fcol("provincia")
+            leg_col  = fcol("legajo","cli_idoriginal")
+            contacts = []
+            for _, row in df.iterrows():
+                mail = str(row.get(mail_col,"") if mail_col else "").strip()
+                if "@" not in mail: continue
+                contacts.append({
+                    "mail":     mail,
+                    "nombre":   str(row.get(nom_col,"")  if nom_col  else ""),
+                    "apellido": str(row.get(ape_col,"")  if ape_col  else ""),
+                    "carrera":  str(row.get(car_col,"")  if car_col  else ""),
+                    "provincia":str(row.get(prov_col,"") if prov_col else ""),
+                    "legajo":   str(row.get(leg_col,"")  if leg_col  else ""),
+                })
 
-        mail_col = fcol("mail","email","correo","e-mail")
-        nom_col  = fcol("nombre","name")
-        ape_col  = fcol("apellido","apellidos")
-        car_col  = fcol("carrera","career")
-        prov_col = fcol("provincia")
-        leg_col  = fcol("legajo","cli_idoriginal")
-
-        contacts = []
-        for _, row in df.iterrows():
-            mail = str(row.get(mail_col,"") if mail_col else "").strip()
-            if "@" not in mail: continue
-            contacts.append({
-                "mail":     mail,
-                "nombre":   str(row.get(nom_col,"") if nom_col else ""),
-                "apellido": str(row.get(ape_col,"") if ape_col else ""),
-                "carrera":  str(row.get(car_col,"") if car_col else ""),
-                "provincia":str(row.get(prov_col,"") if prov_col else ""),
-                "legajo":   str(row.get(leg_col,"") if leg_col else ""),
-            })
         base_id = f.filename.rsplit(".",1)[0]
         return jsonify({"contacts": contacts, "base_id": base_id, "total": len(contacts)})
     except Exception as e:
