@@ -272,7 +272,7 @@ _job_status = {}   # job_id -> {...}
 _jobs_lock  = threading.Lock()
 
 def run_send_job(job_id, contacts, asesores, subject_tpl, body_html_tpl,
-                 wa_number, incluir_form, incluir_tel, delay, base_id, base_name):
+                 wa_number, incluir_form, incluir_tel, delay, base_id, base_name, turno="Todos"):
     with _jobs_lock:
         _job_status[job_id] = {
             "status": "running", "total": len(contacts),
@@ -281,7 +281,8 @@ def run_send_job(job_id, contacts, asesores, subject_tpl, body_html_tpl,
 
     tokens = load_json(TOKENS_FILE, {})
     historial = load_json(HISTORIAL_FILE, [])
-    activos = [a for a in asesores if a.get("active", True)]
+    activos = [a for a in asesores if a.get("active", True) and
+               (turno == "Todos" or (a.get("grupo","")).lower() == turno.lower())]
     if not activos:
         with _jobs_lock:
             _job_status[job_id]["status"] = "error"
@@ -452,6 +453,7 @@ def api_send():
     delay        = float(data.get("delay", 2))
     base_id      = data.get("base_id", "")
     base_name    = data.get("base_name", "")
+    turno        = data.get("turno", "Todos")
 
     if not contacts:
         return jsonify({"error": "Sin contactos"}), 400
@@ -460,7 +462,7 @@ def api_send():
     threading.Thread(
         target=run_send_job,
         args=(job_id, contacts, asesores, subject, body_html,
-              wa_number, incluir_form, incluir_tel, delay, base_id, base_name),
+              wa_number, incluir_form, incluir_tel, delay, base_id, base_name, turno),
         daemon=True
     ).start()
     return jsonify({"job_id": job_id})
@@ -653,7 +655,7 @@ progress::-webkit-progress-value { background:var(--green); border-radius:3px; }
                border-radius:6px; padding:12px; margin:10px 0; }
 
 /* Spinner */
-.spinner { display:inline-block; width:16px; height:16px; border:2px solid var(--dim);
+.active-turno { background:var(--blue) !important; color:#fff !important; }
            border-top-color:var(--blue); border-radius:50%; animation:spin .6s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
 
@@ -768,6 +770,16 @@ progress::-webkit-progress-value { background:var(--green); border-radius:3px; }
   <div class="card">
     <div class="card-header" style="border-left-color:var(--teal)">🚀 Control de envío</div>
     <div class="card-body">
+      <div style="margin-bottom:10px;">
+        <label>Turno que envía:</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+          <button class="btn btn-ghost btn-sm turno-btn active-turno" onclick="selTurno('Todos',this)">🌐 Todos</button>
+          <button class="btn btn-ghost btn-sm turno-btn" onclick="selTurno('Mañana',this)">🌅 Mañana</button>
+          <button class="btn btn-ghost btn-sm turno-btn" onclick="selTurno('Tarde',this)">🌇 Tarde</button>
+          <button class="btn btn-ghost btn-sm turno-btn" onclick="selTurno('Home',this)">🏠 Home</button>
+        </div>
+        <div id="turnoAsesores" style="font-size:11px;color:var(--muted);margin-top:6px;"></div>
+      </div>
       <div class="kpi-grid kpi-grid-4" style="margin-bottom:10px;">
         <div class="kpi"><div class="kpi-bar" style="background:var(--text)"></div>
           <div class="kpi-label">Total</div><div class="kpi-val" id="kpiTotal">0</div></div>
@@ -950,6 +962,19 @@ async function api(path, opts={}) {
     body: opts.body ? JSON.stringify(opts.body) : undefined
   });
   return r.json();
+}
+
+// ── Turnos ────────────────────────────────────────────────────────────────────
+let turnoActual = 'Todos';
+
+function selTurno(turno, btn) {
+  turnoActual = turno;
+  document.querySelectorAll('.turno-btn').forEach(b => b.classList.remove('active-turno'));
+  btn.classList.add('active-turno');
+  const activos = state.asesores.filter(a => a.active !== false &&
+    (turno === 'Todos' || (a.grupo||'').toLowerCase() === turno.toLowerCase()));
+  document.getElementById('turnoAsesores').textContent =
+    activos.length ? `Asesores: ${activos.map(a=>a.name).join(', ')}` : '⚠ Sin asesores en este turno';
 }
 
 // ── Asesores ─────────────────────────────────────────────────────────────────
@@ -1154,8 +1179,9 @@ function textToHtml(txt) {
 
 async function startSend() {
   if (!state.contacts.length) { alert('Cargá una base primero'); return; }
-  if (!state.asesores.filter(a=>a.active!==false).length) {
-    alert('Configurá al menos un asesor activo'); return; }
+  const activos = state.asesores.filter(a => a.active !== false &&
+    (turnoActual === 'Todos' || (a.grupo||'').toLowerCase() === turnoActual.toLowerCase()));
+  if (!activos.length) { alert('Sin asesores activos en el turno seleccionado'); return; }
   const subject = document.getElementById('subject').value.trim();
   if (!subject) { alert('Completá el asunto'); return; }
 
@@ -1164,21 +1190,31 @@ async function startSend() {
   clearLog();
 
   const body_html = textToHtml(document.getElementById('bodyText').value);
-  const res = await api('/api/send', { method:'POST', body: {
-    contacts:    state.contacts,
-    subject:     subject,
-    body_html:   body_html,
-    wa_number:   document.getElementById('waNumber').value,
-    incluir_form:document.getElementById('incluirForm').checked,
-    incluir_tel: document.getElementById('incluirTel').checked,
-    delay:       parseFloat(document.getElementById('delay').value),
-    base_id:     state.baseId,
-    base_name:   state.baseName,
-  }});
-
-  if (res.job_id) {
-    state.currentJob = res.job_id;
-    pollJob();
+  try {
+    const res = await api('/api/send', { method:'POST', body: {
+      contacts:    state.contacts,
+      subject:     subject,
+      body_html:   body_html,
+      wa_number:   document.getElementById('waNumber').value,
+      incluir_form:document.getElementById('incluirForm').checked,
+      incluir_tel: document.getElementById('incluirTel').checked,
+      delay:       parseFloat(document.getElementById('delay').value),
+      base_id:     state.baseId,
+      base_name:   state.baseName,
+      turno:       turnoActual,
+    }});
+    if (res.job_id) {
+      state.currentJob = res.job_id;
+      pollJob();
+    } else {
+      alert('Error: ' + (res.error || 'Sin respuesta'));
+      document.getElementById('btnStart').disabled = false;
+      document.getElementById('btnStop').disabled  = true;
+    }
+  } catch(e) {
+    alert('Error de conexión: ' + e.message);
+    document.getElementById('btnStart').disabled = false;
+    document.getElementById('btnStop').disabled  = true;
   }
 }
 
@@ -1189,24 +1225,27 @@ async function stopSend() {
 
 async function pollJob() {
   if (!state.currentJob) return;
-  const s = await api(`/api/send/status/${state.currentJob}`);
-  const total = s.total || 1;
-  document.getElementById('kpiSent').textContent = s.sent || 0;
-  document.getElementById('kpiErr').textContent  = s.errors || 0;
-  const pct = Math.round(((s.sent||0)+(s.errors||0))/total*100);
-  document.getElementById('kpiPct').textContent  = pct + '%';
-  document.getElementById('progress').value = pct;
-
-  // Log
-  const lb = document.getElementById('logBox');
-  lb.innerHTML = (s.log||[]).map(l =>
-    `<div class="log-${l.tipo||'info'}">[${l.ts}] ${l.msg}</div>`
-  ).join('');
-  lb.scrollTop = lb.scrollHeight;
-
-  if (s.status === 'running') {
-    setTimeout(pollJob, 1500);
-  } else {
+  try {
+    const s = await api(`/api/send/status/${state.currentJob}`);
+    const total = s.total || 1;
+    document.getElementById('kpiSent').textContent = s.sent || 0;
+    document.getElementById('kpiErr').textContent  = s.errors || 0;
+    const pct = Math.round(((s.sent||0)+(s.errors||0))/total*100);
+    document.getElementById('kpiPct').textContent  = pct + '%';
+    document.getElementById('progress').value = pct;
+    const lb = document.getElementById('logBox');
+    lb.innerHTML = (s.log||[]).map(l =>
+      `<div class="log-${l.tipo||'info'}">[${l.ts}] ${l.msg}</div>`).join('');
+    lb.scrollTop = lb.scrollHeight;
+    if (s.status === 'running') {
+      setTimeout(pollJob, 1500);
+    } else {
+      document.getElementById('btnStart').disabled = false;
+      document.getElementById('btnStop').disabled  = true;
+      state.currentJob = null;
+    }
+  } catch(e) {
+    // Si falla el poll, resetear botón
     document.getElementById('btnStart').disabled = false;
     document.getElementById('btnStop').disabled  = true;
     state.currentJob = null;
@@ -1439,6 +1478,11 @@ loadAsesores();
 def api_sync():
     """Recibe datos desde la app de escritorio para sincronizar."""
     data = request.json
+    if "tokens" in data:
+        existing = load_json(TOKENS_FILE, {})
+        existing.update(data["tokens"])
+        save_json(TOKENS_FILE, existing)
+        return jsonify({"ok": True, "total": len(existing)})
     if "tracking" in data:
         existing = load_json(TRACKING_FILE, [])
         # Mergear evitando duplicados por ts+mail
