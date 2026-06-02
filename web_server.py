@@ -25,6 +25,9 @@ from flask import (Flask, request, jsonify, session, redirect,
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "kennedy-secret-2026")
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"]   = True
+app.config["PERMANENT_SESSION_LIFETIME"] = 86400 * 30  # 30 días
 
 # ── Contraseña de acceso ──────────────────────────────────────────────────────
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "juanpiolmos2005")
@@ -82,6 +85,7 @@ def login():
     error = False
     if request.method == "POST":
         if request.form.get("password") == APP_PASSWORD:
+            session.permanent = True
             session["logged_in"] = True
             return redirect("/")
         error = True
@@ -920,7 +924,8 @@ function showPage(name) {
 // ── API helper ─────────────────────────────────────────────────────────────────
 async function api(path, opts={}) {
   const r = await fetch(path, {
-    headers: {'Content-Type':'application/json'},
+    headers: opts.body ? {'Content-Type':'application/json'} : {},
+    credentials: 'include',
     ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined
   });
@@ -1008,7 +1013,7 @@ async function loadFile(input) {
   fd.append('file', file);
 
   try {
-    const r = await fetch('/api/upload', {method:'POST', body: fd});
+    const r = await fetch('/api/upload', {method:'POST', body: fd, credentials:'include'});
     const data = await r.json();
     if (data.error) {
       document.getElementById('fileInfo').textContent = '❌ Error: ' + data.error;
