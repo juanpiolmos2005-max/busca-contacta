@@ -656,6 +656,13 @@ progress::-webkit-progress-value { background:var(--green); border-radius:3px; }
 
 /* Spinner */
 .active-turno { background:var(--blue) !important; color:#fff !important; }
+.tbtn { background:var(--card); border:1px solid var(--bord); color:var(--text);
+        border-radius:4px; padding:3px 7px; font-size:12px; cursor:pointer;
+        transition:all .15s; white-space:nowrap; }
+.tbtn:hover { background:var(--bord2); }
+.tsep { width:1px; background:var(--bord); height:18px; margin:0 2px; }
+.var-btn { color:var(--teal) !important; font-size:11px; }
+#bodyEditor:empty:before { content:attr(placeholder); color:var(--dim); pointer-events:none; }
            border-top-color:var(--blue); border-radius:50%; animation:spin .6s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
 
@@ -736,16 +743,92 @@ progress::-webkit-progress-value { background:var(--green); border-radius:3px; }
     <div class="card-body">
       <label>Asunto:</label>
       <input type="text" id="subject" placeholder="Ej: Información sobre {Carrera} — Universidad Kennedy">
-      <label>Cuerpo del email:</label>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
-        <button class="btn btn-ghost btn-sm" onclick="insertVar('{Nombre}')">Nombre</button>
-        <button class="btn btn-ghost btn-sm" onclick="insertVar('{Carrera}')">Carrera</button>
-        <button class="btn btn-ghost btn-sm" onclick="insertVar('{Asesor}')">Asesor</button>
-        <button class="btn btn-ghost btn-sm" onclick="insertVar('{Provincia}')">Provincia</button>
+
+      <label style="margin-top:12px;">Cuerpo del email:</label>
+
+      <!-- Barra de herramientas -->
+      <div id="editorToolbar" style="background:var(--card2);border:1px solid var(--bord);
+           border-bottom:none;border-radius:6px 6px 0 0;padding:6px 8px;
+           display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
+
+        <!-- Deshacer/Rehacer -->
+        <button class="tbtn" onclick="edCmd('undo')" title="Deshacer">↩</button>
+        <button class="tbtn" onclick="edCmd('redo')" title="Rehacer">↪</button>
+        <div class="tsep"></div>
+
+        <!-- Tamaño -->
+        <select onchange="edCmd('fontSize',this.value);this.value=''"
+          style="background:var(--card2);border:1px solid var(--bord);color:var(--text);
+                 border-radius:4px;padding:3px 4px;font-size:11px;cursor:pointer;">
+          <option value="">Tamaño</option>
+          <option value="1">9</option><option value="2">10</option>
+          <option value="3">11</option><option value="4">14</option>
+          <option value="5">18</option><option value="6">24</option>
+          <option value="7">36</option>
+        </select>
+        <div class="tsep"></div>
+
+        <!-- Estilo -->
+        <button class="tbtn" style="font-weight:700" onclick="edCmd('bold')" title="Negrita">B</button>
+        <button class="tbtn" style="font-style:italic" onclick="edCmd('italic')" title="Cursiva">I</button>
+        <button class="tbtn" style="text-decoration:underline" onclick="edCmd('underline')" title="Subrayado">U</button>
+        <button class="tbtn" style="text-decoration:line-through" onclick="edCmd('strikeThrough')" title="Tachado">S</button>
+        <div class="tsep"></div>
+
+        <!-- Alineación -->
+        <button class="tbtn" onclick="edCmd('justifyLeft')" title="Izquierda">≡L</button>
+        <button class="tbtn" onclick="edCmd('justifyCenter')" title="Centro">≡C</button>
+        <button class="tbtn" onclick="edCmd('justifyRight')" title="Derecha">≡R</button>
+        <div class="tsep"></div>
+
+        <!-- Listas -->
+        <button class="tbtn" onclick="edCmd('insertUnorderedList')" title="Lista">• ≡</button>
+        <div class="tsep"></div>
+
+        <!-- Color -->
+        <div style="position:relative;display:inline-block;">
+          <button class="tbtn" onclick="document.getElementById('colorPicker').click()" title="Color texto">A🎨</button>
+          <input type="color" id="colorPicker" style="position:absolute;opacity:0;width:0;height:0;"
+                 onchange="edCmd('foreColor',this.value)">
+        </div>
+        <div class="tsep"></div>
+
+        <!-- Link -->
+        <button class="tbtn" onclick="insertLink()" title="Insertar link">🔗 Link</button>
+
+        <!-- Emoji -->
+        <div style="position:relative;">
+          <button class="tbtn" onclick="toggleEmoji()" title="Emojis">😀</button>
+          <div id="emojiPanel" style="display:none;position:absolute;top:100%;left:0;z-index:100;
+               background:var(--card);border:1px solid var(--bord2);border-radius:8px;
+               padding:8px;width:280px;box-shadow:0 4px 20px #0006;">
+            <div style="display:flex;flex-wrap:wrap;gap:2px;">
+            </div>
+          </div>
+        </div>
+        <div class="tsep"></div>
+
+        <!-- Variables -->
+        <span style="font-size:10px;color:var(--dim)">Variables:</span>
+        <button class="tbtn var-btn" onclick="insertVar('{Nombre}')">Nombre</button>
+        <button class="tbtn var-btn" onclick="insertVar('{Apellido}')">Apellido</button>
+        <button class="tbtn var-btn" onclick="insertVar('{Carrera}')">Carrera</button>
+        <button class="tbtn var-btn" onclick="insertVar('{Asesor}')">Asesor</button>
+        <button class="tbtn var-btn" onclick="insertVar('{Provincia}')">Provincia</button>
       </div>
-      <textarea id="bodyText" rows="8"
-        placeholder="Hola {Nombre},&#10;&#10;Te contactamos desde la Universidad Kennedy para contarte sobre la carrera de {Carrera}..."></textarea>
-      <small style="color:var(--dim)">Las variables se reemplazan automáticamente al enviar.</small>
+
+      <!-- Editor contenteditable -->
+      <div id="bodyEditor" contenteditable="true"
+        style="min-height:180px;background:var(--surf);border:1px solid var(--bord);
+               border-radius:0 0 6px 6px;padding:12px;font-family:Arial,sans-serif;
+               font-size:14px;color:var(--text);outline:none;line-height:1.6;"
+        placeholder="Escribí el cuerpo del email acá..."
+        oninput="syncBody()"></div>
+      <small style="color:var(--dim);font-size:10px;">
+        Las variables {Nombre} {Carrera} etc. se reemplazan automáticamente al enviar.
+      </small>
+      <!-- Campo oculto para compatibilidad con el resto del código -->
+      <textarea id="bodyText" style="display:none;"></textarea>
 
       <div style="margin-top:12px;">
         <div class="toggle-row">
@@ -1170,8 +1253,85 @@ function insertVar(v) {
   ta.focus();
 }
 
+// ── Editor rico ───────────────────────────────────────────────────────────────
+function edCmd(cmd, val=null) {
+  document.getElementById('bodyEditor').focus();
+  document.execCommand(cmd, false, val);
+  syncBody();
+}
+
+function syncBody() {
+  // Sincroniza el contenido del editor al textarea oculto
+  document.getElementById('bodyText').value =
+    document.getElementById('bodyEditor').innerHTML;
+}
+
+function insertVar(v) {
+  const ed = document.getElementById('bodyEditor');
+  ed.focus();
+  const sel = window.getSelection();
+  if (sel.rangeCount) {
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(document.createTextNode(v));
+    range.collapse(false);
+  } else {
+    ed.innerHTML += v;
+  }
+  syncBody();
+}
+
+function insertLink() {
+  const txt = window.getSelection().toString() || '';
+  const url = prompt('URL del enlace:', 'https://');
+  if (!url) return;
+  const label = txt || prompt('Texto del enlace:', url) || url;
+  document.getElementById('bodyEditor').focus();
+  document.execCommand('insertHTML', false,
+    `<a href="${url}" style="color:#4F8EF7">${label}</a>`);
+  syncBody();
+}
+
+const EMOJIS = ['😀','😊','😍','🥰','😎','🤩','😢','😅','🙏','👍','👏','🎉','💪','🔥',
+  '⭐','✅','❤️','💙','💚','📚','🎓','🏫','📝','✏️','📧','📱','💻','📅','🗓️',
+  '📊','📈','💡','🔔','🎯','🏆','🥇','💰','🎁','➡️','✔️','❌','⚠️','ℹ️','🌟','💫','✨'];
+
+function toggleEmoji() {
+  const p = document.getElementById('emojiPanel');
+  if (p.style.display === 'none') {
+    if (!p.querySelector('button')) {
+      p.querySelector('div').innerHTML = EMOJIS.map(e =>
+        `<button onclick="insertEmoji('${e}')" style="background:none;border:none;
+         font-size:20px;cursor:pointer;padding:2px;border-radius:4px;"
+         onmouseover="this.style.background='var(--bord)'"
+         onmouseout="this.style.background='none'">${e}</button>`).join('');
+    }
+    p.style.display = 'block';
+    document.addEventListener('click', closeEmoji, {once:true});
+  } else {
+    p.style.display = 'none';
+  }
+}
+
+function closeEmoji(e) {
+  if (!e.target.closest('#emojiPanel') && !e.target.title?.includes('Emoji')) {
+    document.getElementById('emojiPanel').style.display = 'none';
+  }
+}
+
+function insertEmoji(em) {
+  document.getElementById('bodyEditor').focus();
+  document.execCommand('insertText', false, em);
+  document.getElementById('emojiPanel').style.display = 'none';
+  syncBody();
+}
+
 // ── Envío ─────────────────────────────────────────────────────────────────────
 function textToHtml(txt) {
+  // Si el editor rico tiene contenido, usarlo directamente
+  const editorContent = document.getElementById('bodyEditor').innerHTML.trim();
+  if (editorContent && editorContent !== '<br>') return editorContent;
+  // Fallback al textarea
   return txt.split('\n').map(l => l.trim()
     ? `<p style="margin:0 0 4px 0">${l.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')}</p>`
     : '<br>').join('');
